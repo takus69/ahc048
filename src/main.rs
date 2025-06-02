@@ -2,6 +2,7 @@ use proconio::input;
 use std::fmt;
 use itertools::Itertools;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 struct Score {
@@ -78,6 +79,16 @@ impl Color {
         + (self.m - other.m).powi(2) 
         + (self.y - other.y).powi(2))
         .sqrt()
+    }
+
+    fn mixing(color1: Color, color2: Color, i1: usize, i2: usize) -> Self {
+        let i1 = i1 as f64;
+        let i2 = i2 as f64;
+        let c = (color1.c*i1 + color2.c*i2) / (i1+i2);
+        let m = (color1.m*i1 + color2.m*i2) / (i1+i2);
+        let y = (color1.y*i1 + color2.y*i2) / (i1+i2);
+
+        Self { c, m, y }
     }
 }
 
@@ -195,6 +206,68 @@ impl Palette1 {
     }
 }
 
+struct Palette2 {
+    own: Vec<Color>,
+    row: HashMap<usize, usize>,
+    primes: Vec<usize>,
+}
+
+impl Palette2 {
+    fn new(own: &Vec<Color>, primes: Vec<usize>) -> Self {
+        let own = own.clone();
+        let mut row: HashMap<usize, usize> = HashMap::new();
+        for (i, &p) in primes.iter().enumerate() {
+            row.insert(p, i);
+        }
+        Self { own, row, primes }
+    }
+    
+    fn init(&self, n: usize) -> Palette {
+        let mut v = vec![vec![false; n-1]; n];
+        let h = vec![vec![true; n]; n-1];
+
+        for (&p, &i) in self.row.iter() {
+            v[i][p-1] = true;
+        }
+
+        Palette { v, h }
+    }
+
+    fn make_color(&self, p: usize, i: usize, k1: usize, k2: usize) -> (Color, usize, usize, Vec<Action>) {
+        let mut actions: Vec<Action> = Vec::new();
+        let &pi = self.row.get(&p).unwrap();
+        let (cnt, turn, color) = if p == 1 {
+            actions.push(Action::add_color(pi, 0, k1));
+            actions.push(Action::give_paint(pi, 0));
+
+            (1, 2, self.own[k1])
+        } else {
+            let mut tmp_turn = 4;
+            actions.push(Action::add_color(pi, 0, k2));
+            if p != i {
+                actions.push(Action::toggle_separator(pi, i-1, pi, i));
+                tmp_turn += 1;
+            }
+            actions.push(Action::add_color(pi, 0, k1));
+            actions.push(Action::give_paint(pi, 0));
+            if p != i {
+                actions.push(Action::toggle_separator(pi, i-1, pi, i));
+                tmp_turn += 1;
+            }
+            actions.push(Action::discard_paint(pi, 0));
+            let color = if i == 1 {
+                Color::mixing(self.own[k1], self.own[k2], p-1, i)
+            } else {
+                Color::mixing(self.own[k1], self.own[k2], p, i)
+            };
+
+            (2, tmp_turn, color)
+        };
+
+        (color, cnt, turn, actions)
+    }
+}
+
 struct Solver {
     n: usize,
     k: usize,
@@ -241,9 +314,9 @@ impl Solver {
         Self { n, k, h, t, d, own, target, palette, actions, turn, score }
     }
 
-    fn solve(&mut self) {
+    fn one_paint(&self) -> (Palette, Vec<Action>, Score, usize) {
         // 1色の最適な絵の具を選択
-        let palette1 = Palette1::new(&self.own);
+        let palette = Palette1::new(&self.own);
         let mut score = Score::new(self.h, self.d);
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
@@ -253,7 +326,7 @@ impl Solver {
             let mut opt_score = score;
             let mut opt_turn = 0;
             for i in 0..self.k {
-                let (color, cnt, t, action) = palette1.make_color(i);
+                let (color, cnt, t, action) = palette.make_color(i);
                 let (eval, _) = score.eval(target_color, color, cnt);
                 if eval < opt_eval {
                     opt_eval = eval;
@@ -267,10 +340,57 @@ impl Solver {
             score = opt_score;
             turn += opt_turn;
         }
-        self.palette = palette1.init(self.n);
-        self.actions = actions;
-        self.score = score;
-        self.turn = turn;
+
+        (palette.init(self.n), actions, score, turn)
+    }
+
+    fn two_paint(&self) -> (Palette, Vec<Action>, Score, usize) {
+        let primes = vec![1, 2, 3, 5];
+        let palette = Palette2::new(&self.own, primes);
+        let mut score = Score::new(self.h, self.d);
+        let mut actions: Vec<Action> = Vec::new();
+        let mut turn = 0;
+        for &target_color in self.target.iter() {
+            let mut opt_eval= usize::MAX;
+            let mut opt_action: Vec<Action> = Vec::new();
+            let mut opt_score = score;
+            let mut opt_turn = 0;
+            for k1 in 0..self.k {
+                for k2 in 0..self.k {
+                    for &p in palette.primes.iter() {
+                        let end = if p <= 2 { p+1 } else { p };
+                        for i in 1..end {
+                            let (color, cnt, t, action) = palette.make_color(p, i, k1, k2);
+                            let (eval, _) = score.eval(target_color, color, cnt);
+                            if eval < opt_eval {
+                                opt_eval = eval;
+                                opt_action = action;
+                                opt_score = score;
+                                opt_score.add_score(target_color, color, cnt);
+                                opt_turn = t;
+                            }
+                        }
+                    }
+                }
+            }
+            actions.extend(opt_action);
+            score = opt_score;
+            turn += opt_turn;
+        }
+
+        (palette.init(self.n), actions, score, turn)
+    }
+
+    fn solve(&mut self) {
+        (self.palette, self.actions, self.score, self.turn) = self.one_paint(); 
+        
+        let (palette, actions, score, turn) = self.two_paint();
+        if score < self.score && turn <= self.t {
+            self.palette = palette;
+            self.actions = actions;
+            self.score = score;
+            self.turn = turn;
+        }
     }
 
     fn ans(&self) {

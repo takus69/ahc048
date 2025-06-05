@@ -1,8 +1,32 @@
 use proconio::input;
 use std::fmt;
 use itertools::Itertools;
-use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{HashMap, BinaryHeap};
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone)]
+struct OrdFloat(f64);
+
+impl PartialEq for OrdFloat {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for OrdFloat {}
+
+impl PartialOrd for OrdFloat {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+
+impl Ord for OrdFloat {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.partial_cmp(&other.0).unwrap() // NaNに注意！
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Score {
@@ -16,7 +40,7 @@ struct Score {
 
 impl Score {
     fn new(h: usize, d: usize) -> Self {
-        Self { s: 1, e: 0.0, v: 0, h, d, cnt: 0 }
+        Self { s: usize::MAX, e: 0.0, v: 0, h, d, cnt: 0 }
     }
 
     fn dist(color1: Color, color2: Color) -> f64 {
@@ -50,6 +74,12 @@ impl Score {
     }
 }
 
+impl fmt::Display for Score {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Score: {}, d: {}, e: {}", self.s, self.score_d(), self.score_e())
+    }
+}
+
 impl PartialEq for Score {
     fn eq(&self, other: &Self) -> bool {
         self.s == other.s
@@ -62,7 +92,7 @@ impl PartialOrd for Score {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Color {
     c: f64,
     m: f64,
@@ -268,6 +298,126 @@ impl Palette2 {
     }
 }
 
+#[derive(Clone)]
+struct Palette3 {
+    own: Vec<Color>,
+    color: Color,
+    gram: f64,
+    coef: Vec<f64>,
+}
+
+impl Palette3 {
+    fn new(own: &Vec<Color>) -> Self {
+        let own = own.clone();
+        let color = Color::new(0.0, 0.0, 0.0);
+        let gram = 0.0;
+        let coef = vec![0.0; own.len()];
+
+        Self { own, color, gram, coef }
+    }
+    
+    fn init(&self, n: usize) -> Palette {
+        let v = vec![vec![false; n-1]; n];
+        let h = vec![vec![false; n]; n-1];
+
+        Palette { v, h }
+    }
+
+    fn add_paint(&mut self, k: usize) {
+        self.color = Color::mixing(self.color, self.own[k], self.gram as usize, 1);
+        self.gram += 1.0;
+        self.coef[k] += 1.0;
+    }
+
+    fn add_paints(&mut self, paints: &Vec<usize>) -> (Color, usize, usize, Vec<Action>) {
+        let mut turn = 1;
+        let mut cnt = 0;
+        let mut actions: Vec<Action> = Vec::new();
+        for (k, &c) in paints.iter().enumerate() {
+            for _ in 0..c {
+                self.add_paint(k);
+                actions.push(Action::add_color(0, 0, k));
+                cnt += 1;
+                turn += 1;
+            }
+        }
+        actions.push(Action::give_paint(0, 0));
+        self.give_paint();
+
+        (self.color, cnt, turn, actions)
+    }
+
+    fn give_paint(&mut self) -> Color {
+        for i in 0..self.coef.len() {
+            self.coef[i] -= self.coef[i] / self.gram;
+        }
+        self.gram -= 1.0;
+
+        self.color
+    }
+}
+
+#[derive(Clone)]
+struct Palette4 {
+    color: Vec<Color>,
+    gram: Vec<usize>,
+    comb: Vec<Vec<usize>>,
+    comb2i: HashMap<usize, usize>,
+}
+
+impl Palette4 {
+    fn new(own: &Vec<Color>, comb: &Vec<Vec<usize>>, comb_i: &Vec<usize>) -> Self {
+        let comb = comb.clone();
+        let mut color: Vec<Color> = Vec::new();
+        let mut comb2i: HashMap<usize, usize> = HashMap::new();
+        for i in 0..comb.len() {
+            let comb2 = &comb[i];
+            comb2i.insert(comb_i[i], i);
+            let (mut c, mut m, mut y) = (0.0, 0.0, 0.0);
+            for &k in comb2.iter() {
+                c += own[k].c;
+                m += own[k].m;
+                y += own[k].y;
+            }
+            let cnt = comb2.len() as f64;
+            c /= cnt;
+            m /= cnt;
+            y /= cnt;
+            color.push(Color { c, m, y });
+        }
+        let gram: Vec<usize> = vec![0; comb.len()];
+
+        Self { color, gram, comb, comb2i }
+    }
+    
+    fn init(&self, n: usize) -> Palette {
+        let v = vec![vec![false; n-1]; n];
+        let h = vec![vec![true; n]; n-1];
+
+        Palette { v, h }
+    }
+
+    fn give_paint(&mut self, comb_i: usize) -> (Color, usize, usize, Vec<Action>) {
+        let mut cnt = 0;
+        let mut turn = 0;
+        let &i = self.comb2i.get(&comb_i).unwrap();
+        let mut actions: Vec<Action> = Vec::new();
+        if self.gram[i] == 0 {
+            for &k in self.comb[i].iter() {
+                actions.push(Action::add_color(i, 0, k));
+                cnt += 1;
+                turn += 1;
+            } 
+            self.gram[i] += self.comb[i].len();
+        }
+        actions.push(Action::give_paint(i, 0));
+        self.gram[i] -= 1;
+        turn += 1;
+
+        (self.color[i], cnt, turn, actions)
+    }
+}
+
 struct Solver {
     n: usize,
     k: usize,
@@ -280,6 +430,7 @@ struct Solver {
     actions: Vec<Action>,
     turn: usize,
     score: Score,
+    timer: Instant,
 }
 
 impl Solver {
@@ -310,8 +461,9 @@ impl Solver {
         let actions: Vec<Action> = Vec::new();
         let turn = 0;
         let score = Score::new(h, d);
+        let timer = Instant::now();
 
-        Self { n, k, h, t, d, own, target, palette, actions, turn, score }
+        Self { n, k, h, t, d, own, target, palette, actions, turn, score, timer }
     }
 
     fn one_paint(&self) -> (Palette, Vec<Action>, Score, usize) {
@@ -381,10 +533,218 @@ impl Solver {
         (palette.init(self.n), actions, score, turn)
     }
 
+    fn base_paint(&self) -> (Palette, Vec<Action>, Score, usize) {
+        // 絵の具の組み合わせ
+        let elements = vec![0.0, 1.0];
+        let mut comb: Vec<Vec<f64>> = vec![vec![]];
+        for _ in 0..self.k {
+            let mut tmp_comb: Vec<Vec<f64>> = Vec::new();
+            for v in comb.iter() {
+                for &e in elements.iter() {
+                    let mut v2 = v.clone();
+                    v2.push(e);
+                    tmp_comb.push(v2);
+                }
+            }
+            comb = tmp_comb;
+        }
+
+        fn mixing_color(own: &Vec<Color>, trial: &Vec<f64>) -> Color {
+            let k = own.len();
+            let (mut c, mut m, mut y) = (0.0, 0.0, 0.0);
+            let mut all_cnt = 0.0;
+            for i in 0..k {
+                let color = own[i];
+                let (ci, mi, yi) = (color.c, color.m, color.y);
+                let cnt = trial[i];
+                c += ci*cnt;
+                m += mi*cnt;
+                y += yi*cnt;
+                all_cnt += cnt;
+            }
+
+            c /= all_cnt;
+            m /= all_cnt;
+            y /= all_cnt;
+
+            Color { c, m, y }
+        }
+
+        let mut target_coef: Vec<Vec<f64>> = Vec::new();
+        for &t in self.target.iter() {
+            let mut opt_eval = f64::MAX;
+            let mut opt_trial = vec![0.0; self.k];
+            for trial in comb.iter() {
+                let color = mixing_color(&self.own, trial);
+                let e = t.dist(&color);
+                if e < opt_eval {
+                    opt_eval = e;
+                    opt_trial = trial.clone();
+                }
+            }
+            target_coef.push(opt_trial);
+        }
+
+        fn diff_coef(t_coef: &Vec<f64>, p_coef: &Vec<f64>) -> usize {
+            let t_gram: f64 = t_coef.iter().sum();
+            let p_gram: f64 = p_coef.iter().sum();
+
+            let mut max_i = 0;
+            let mut max_diff = 0.0;
+            for (i, &ti) in t_coef.iter().enumerate() {
+                let pi = p_coef[i];
+                if ti*p_gram > pi*t_gram && max_diff < ti*p_gram - pi*t_gram {
+                    max_diff = ti*p_gram - pi*t_gram;
+                    max_i = i;
+                }
+            }
+            
+            max_i
+        }
+
+        let mut palette = Palette3::new(&self.own);
+        let mut add_coef: Vec<Vec<usize>> = Vec::new();
+        for i in 0..self.h {
+            let t_coef = &target_coef[i];
+            let target_color = self.target[i];
+
+            let mut opt_eval = f64::MAX;
+            let mut opt_coef = vec![0; self.k];
+            let mut opt_palette = palette.clone();
+
+            let mut loop_cnt = 0;
+            loop {
+                loop_cnt += 1;
+                let max_diff_i = diff_coef(t_coef, &palette.coef);
+                palette.add_paint(max_diff_i);
+                let e = target_color.dist(&palette.color);
+                let eval = e*10000.0 + (self.d*(loop_cnt-1)) as f64 / if self.h-i > palette.gram as usize { (self.h - i - palette.gram as usize) as f64 } else { 1.0 };
+
+                if eval < opt_eval {
+                    opt_eval = eval;
+                    opt_coef[max_diff_i] += 1;
+                    opt_palette = palette.clone();
+                } else {
+                    palette = opt_palette;
+                    break;
+                }
+            }
+            add_coef.push(opt_coef);
+        }
+
+        let mut score = Score::new(self.h, self.d);
+        let mut actions: Vec<Action> = Vec::new();
+        let mut turn = 0;
+        let mut palette = Palette3::new(&self.own);
+        for i in 0..self.h {
+            let paints= &add_coef[i];
+            let target_color = self.target[i];
+            let (color, cnt, t, action) = palette.add_paints(paints);
+            score.add_score(target_color, color, cnt);
+            turn += t;
+            actions.extend(action);
+        }
+
+        (palette.init(self.n), actions, score, turn)
+    }
+
+    fn base_paint2(&self) -> (Palette, Vec<Action>, Score, usize) {
+        // 絵の具の組み合わせ
+        let mut comb: Vec<Vec<usize>> = Vec::new();
+        let mut comb_i: Vec<usize> = Vec::new();
+        let max_cnt = 2_usize.pow(self.k as u32).min(20);
+        for i in 1..max_cnt {
+            comb_i.push(i);
+            let mut i = i;
+            let mut cnt = 0;
+            let mut tmp_comb: Vec<usize> = Vec::new();
+            while i > 0 {
+                if i % 2 == 1 {
+                    tmp_comb.push(cnt);
+                }
+                i >>= 1;
+                cnt += 1;
+            }
+            comb.push(tmp_comb);
+        }
+        eprintln!("comb: {:?}", comb);
+
+        // 目標の色のeが一番小さい組合せを探す
+        fn mixing_color(own: &Vec<Color>, trial: &Vec<usize>) -> Color {
+            let (mut c, mut m, mut y) = (0.0, 0.0, 0.0);
+            for &k in trial.iter() {
+                let color = own[k];
+                let (ci, mi, yi) = (color.c, color.m, color.y);
+                c += ci;
+                m += mi;
+                y += yi;
+            }
+
+            let cnt = trial.len() as f64;
+            c /= cnt;
+            m /= cnt;
+            y /= cnt;
+
+            Color { c, m, y }
+        }
+
+        let mut trials_heap: Vec<BinaryHeap<(Reverse<OrdFloat>, usize)>> = vec![BinaryHeap::new(); self.h];
+        for (i, trial) in comb.iter().enumerate() {
+            let p_color = mixing_color(&self.own, trial);
+            for (j, t_color) in self.target.iter().enumerate() {
+                let e = p_color.dist(t_color);
+                trials_heap[j].push((Reverse(OrdFloat(e)), i));
+            }
+        }
+
+        let mut trials_cnt: Vec<usize> = vec![0; comb.len()];
+        let mut trials_e: Vec<f64> = vec![0.0; comb.len()];
+        let mut estimate_e = 0.0;
+        let mut target_comb: Vec<usize> = Vec::new();
+        for i in 0..self.h {
+            let (Reverse(OrdFloat(e)), j) = trials_heap[i].pop().unwrap();
+            trials_cnt[j] += 1;
+            trials_e[j] += e;
+            estimate_e += e;
+            target_comb.push(comb_i[j]);
+        }
+        eprintln!("trials_cnt: {:?}", trials_cnt);
+        eprintln!("trials_e: {:?}", trials_e);
+        eprintln!("estimate_e: {:?}", estimate_e);
+
+        // paletteの構築
+        let mut palette = Palette4::new(&self.own, &comb, &comb_i);
+
+        // Actionsの構築
+        let mut score = Score::new(self.h, self.d);
+        let mut actions: Vec<Action> = Vec::new();
+        let mut turn = 0;
+        for i in 0..self.h { 
+            let (color, cnt, t, action) = palette.give_paint(target_comb[i]);
+            score.add_score(self.target[i], color, cnt);
+            turn += t;
+            actions.extend(action);
+        }
+        
+        (palette.init(self.n), actions, score, turn)
+    }
+
     fn solve(&mut self) {
+        eprintln!("start solve: {:.2?} s", self.timer.elapsed());
         (self.palette, self.actions, self.score, self.turn) = self.one_paint(); 
+        eprintln!("{:.2?} s: one paint: {}", self.timer.elapsed(), self.score);
         
         let (palette, actions, score, turn) = self.two_paint();
+        eprintln!("{:.2?} s: two paint: {}", self.timer.elapsed(), score);
+        if score < self.score && turn <= self.t {
+            self.palette = palette;
+            self.actions = actions;
+            self.score = score;
+            self.turn = turn;
+        }
+
+        let (palette, actions, score, turn) = self.base_paint2();
+        eprintln!("{:.2?} s: base paint2: {}", self.timer.elapsed(), score);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;

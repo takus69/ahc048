@@ -2,8 +2,10 @@ use proconio::input;
 use std::fmt;
 use itertools::Itertools;
 use std::cmp::{Ordering, Reverse};
-use std::collections::{HashMap, BinaryHeap};
+use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::time::{Duration, Instant};
+use rand::{SeedableRng, Rng};
+use rand::rngs::StdRng;
 
 #[derive(Debug, Clone)]
 struct OrdFloat(f64);
@@ -652,8 +654,17 @@ impl Solver {
         // 絵の具の組み合わせ
         let mut comb: Vec<Vec<usize>> = Vec::new();
         let mut comb_i: Vec<usize> = Vec::new();
-        let max_cnt = 2_usize.pow(self.k as u32).min(20);
-        for i in 1..max_cnt {
+        let limit = 2_usize.pow(self.k as u32);
+        let max_cnt = (limit-1).min(1000);
+        // ランダムに重複なしの値を100個生成
+        let seed = [0; 32]; // 固定のシード値を設定
+        let mut rng = StdRng::from_seed(seed);
+        let mut unique_values = HashSet::new();
+        while unique_values.len() < max_cnt {
+            let value = rng.gen_range(1..limit);
+            unique_values.insert(value);
+        }
+        for i in unique_values {
             comb_i.push(i);
             let mut i = i;
             let mut cnt = 0;
@@ -667,7 +678,6 @@ impl Solver {
             }
             comb.push(tmp_comb);
         }
-        eprintln!("comb: {:?}", comb);
 
         // 目標の色のeが一番小さい組合せを探す
         fn mixing_color(own: &Vec<Color>, trial: &Vec<usize>) -> Color {
@@ -700,20 +710,50 @@ impl Solver {
         let mut trials_cnt: Vec<usize> = vec![0; comb.len()];
         let mut trials_e: Vec<f64> = vec![0.0; comb.len()];
         let mut estimate_e = 0.0;
-        let mut target_comb: Vec<usize> = Vec::new();
-        for i in 0..self.h {
-            let (Reverse(OrdFloat(e)), j) = trials_heap[i].pop().unwrap();
-            trials_cnt[j] += 1;
-            trials_e[j] += e;
-            estimate_e += e;
-            target_comb.push(comb_i[j]);
+        let mut target_i: Vec<Vec<usize>> = vec![Vec::new(); comb.len()];
+        let mut out_of_scope: HashSet<usize> = HashSet::new();
+        let mut update_target: Vec<usize> = (0..self.h).collect();
+        let mut target_comb: Vec<usize> = vec![0; self.h];
+        while update_target.len() > 20 {
+            for &i in update_target.iter() {
+                // 誤差が少ないパターンの上位の件数を取得
+                let (Reverse(OrdFloat(mut e)), mut j) = trials_heap[i].pop().unwrap();
+                while out_of_scope.contains(&j) {
+                    (Reverse(OrdFloat(e)), j) = trials_heap[i].pop().unwrap();
+                }
+                target_i[j].push(i);
+                trials_cnt[j] += 1;
+                trials_e[j] += e;
+                estimate_e += e;
+                target_comb[i] = comb_i[j];
+            }
+            let mut heap_cnt: BinaryHeap<(Reverse<usize>, usize)> = trials_cnt.iter().enumerate().map(|(i, &cnt)| (Reverse(cnt), i)).collect();
+            let pop_cnt = if heap_cnt.len() > 20 { heap_cnt.len() - 20 } else { 0 };
+            update_target = Vec::new();
+            for _ in 0..pop_cnt {
+                let (_, j) = heap_cnt.pop().unwrap();
+                out_of_scope.insert(j);
+                for &l in target_i[j].iter() {
+                    update_target.push(l);
+                }
+                target_i[j] = Vec::new();
+                trials_cnt[j] = 0;
+                estimate_e -= trials_e[j];
+                trials_e[j] = 0.0;
+            }
         }
-        eprintln!("trials_cnt: {:?}", trials_cnt);
-        eprintln!("trials_e: {:?}", trials_e);
         eprintln!("estimate_e: {:?}", estimate_e);
 
         // paletteの構築
-        let mut palette = Palette4::new(&self.own, &comb, &comb_i);
+        let mut comb2: Vec<Vec<usize>> = Vec::new();
+        let mut comb_i2: Vec<usize> = Vec::new();
+        for (i, &cnt) in trials_cnt.iter().enumerate() {
+            if cnt > 0 {
+                comb2.push(comb[i].clone());
+                comb_i2.push(comb_i[i]);
+            }
+        }
+        let mut palette = Palette4::new(&self.own, &comb2, &comb_i2);
 
         // Actionsの構築
         let mut score = Score::new(self.h, self.d);

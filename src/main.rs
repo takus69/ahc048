@@ -430,10 +430,11 @@ impl Palette4 {
 struct Palette5 {
     base_color: Vec<Color>,
     base_gram: Vec<f64>,
+    well_size: usize,
 }
 
 impl Palette5 {
-    fn new(own: &Vec<Color>) -> Self {
+    fn new(own: &Vec<Color>, well_size: usize) -> Self {
         let k = own.len();
         let mut base_color: Vec<Color> = Vec::new();
         for &o in own.iter() {
@@ -441,17 +442,17 @@ impl Palette5 {
         }
         let base_gram: Vec<f64> = vec![0.0; k];
 
-        Self { base_color, base_gram }
+        Self { base_color, base_gram, well_size }
     }
     
     fn init(&self, n: usize) -> Palette {
         let mut v = vec![vec![false; n-1]; n];
         for i in 0..n {
-            v[i][9] = true;
+            v[i][self.well_size-1] = true;
         }
         let mut h = vec![vec![false; n]; n-1];
         for i in 0..(n-1) {
-            for j in 0..10 {
+            for j in 0..self.well_size {
                 h[i][j] = true;
             }
         }
@@ -463,9 +464,10 @@ impl Palette5 {
         let mut cnt = 0;
         let mut turn = 0;
         let mut actions: Vec<Action> = Vec::new();
+        let well_size= self.well_size;
 
         // 係数は10倍して切り上げる
-        let a = [((1.0-a-b)*10.0), (a*10.0), (b*10.0)];
+        let a = [((1.0-a-b)*well_size as f64), (a*well_size as f64), (b*well_size as f64)];
         let mut partition: Vec<(usize, usize)> = Vec::new();
         let mut use_grams: Vec<f64> = Vec::new();
 
@@ -479,26 +481,26 @@ impl Palette5 {
             }
             // 必要な絵の具の量にするため、仕切りを追加
             let j = (a[i]/self.base_gram[k]).ceil() as usize;
-            if j < 10 {
-                actions.push(Action::toggle_separator(k, 9-j, k, 10-j));  // 必要な割合に分ける
-                partition.push((k, 9-j));
+            if j < well_size as usize {
+                actions.push(Action::toggle_separator(k, well_size-1-j, k, well_size-j));  // 必要な割合に分ける
+                partition.push((k, well_size-1-j));
                 turn += 1;
             }
-            actions.push(Action::toggle_separator(k, 9, k, 10));  // 混ぜる場所に繋げる
+            actions.push(Action::toggle_separator(k, well_size-1, k, well_size));  // 混ぜる場所に繋げる
             turn += 1;
-            let use_gram = self.base_gram[k] * j as f64 / 10.0;
+            let use_gram = self.base_gram[k] * j as f64 / well_size as f64;
             self.base_gram[k] -= use_gram;  // 残る絵の具の量を計算
             use_grams.push(use_gram);
         }
 
         // 絵の具の提出、残りの破棄
-        actions.push(Action::give_paint(0, 10));
-        actions.push(Action::discard_paint(0, 10));
+        actions.push(Action::give_paint(0, well_size));
+        actions.push(Action::discard_paint(0, well_size));
         turn += 2;
 
         // 仕切りを元に戻す
         for (i, &k) in [k1, k2, k3].iter().enumerate() {
-            actions.push(Action::toggle_separator(k, 9, k, 10));  // 混ぜる場所から隔離
+            actions.push(Action::toggle_separator(k, well_size-1, k, well_size));  // 混ぜる場所から隔離
             turn += 1;
         }
         for &(k, j) in partition.iter() {
@@ -911,7 +913,7 @@ impl Solver {
         let mut three_paint_params: Vec<(usize, usize, usize, f64, f64)> = Vec::new();
         let mut estimate_e = 0.0;
 
-        for &t in self.target.iter() {
+        for (i, &t) in self.target.iter().enumerate() {
             let mut opt_e = f64::MAX;
             let mut opt_params = (0, 0, 0, 0.0, 0.0);
 
@@ -934,17 +936,23 @@ impl Solver {
             }
             three_paint_params.push(opt_params);
             estimate_e += opt_e;
+            if i < 10 {
+                eprintln!("i: {}, opt_e: {}", i, opt_e);
+            }
         }
         eprintln!("estimate_e: {}", estimate_e);
 
         // Actionsの構築
-        let mut palette = Palette5::new(&self.own);
+        let mut palette = Palette5::new(&self.own, 19);
         let mut score = Score::new(self.h, self.d);
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
         for i in 0..self.h { 
             let (k1, k2, k3, a, b) = three_paint_params[i];
             let (color, cnt, t, action) = palette.make_paint(k1, k2, k3, a, b);
+            if i < 10 {
+                eprintln!("i: {}, e: {}", i, color.dist(&self.target[i]));
+            }
             score.add_score(self.target[i], color, cnt);
             turn += t;
             actions.extend(action);

@@ -465,7 +465,7 @@ impl Palette5 {
         let mut actions: Vec<Action> = Vec::new();
 
         // 係数は10倍して切り上げる
-        let a = [((1.0-a-b)*10.0).ceil(), (a*10.0).ceil(), (b*10.0).ceil()];
+        let a = [((1.0-a-b)*10.0), (a*10.0), (b*10.0)];
         let mut partition: Vec<(usize, usize)> = Vec::new();
         let mut use_grams: Vec<f64> = Vec::new();
 

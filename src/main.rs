@@ -122,6 +122,12 @@ impl Color {
 
         Self { c, m, y }
     }
+
+    fn add_color(&mut self, color: Color, r: f64) {
+        self.c += color.c * r;
+        self.m += color.m * r;
+        self.y += color.y * r;
+    }
 }
 
 #[derive(Debug)]
@@ -417,6 +423,100 @@ impl Palette4 {
         turn += 1;
 
         (self.color[i], cnt, turn, actions)
+    }
+}
+
+#[derive(Clone)]
+struct Palette5 {
+    base_color: Vec<Color>,
+    base_gram: Vec<f64>,
+}
+
+impl Palette5 {
+    fn new(own: &Vec<Color>) -> Self {
+        let k = own.len();
+        let mut base_color: Vec<Color> = Vec::new();
+        for &o in own.iter() {
+            base_color.push(o);
+        }
+        let base_gram: Vec<f64> = vec![0.0; k];
+
+        Self { base_color, base_gram }
+    }
+    
+    fn init(&self, n: usize) -> Palette {
+        let mut v = vec![vec![false; n-1]; n];
+        for i in 0..n {
+            v[i][9] = true;
+        }
+        let mut h = vec![vec![false; n]; n-1];
+        for i in 0..(n-1) {
+            for j in 0..10 {
+                h[i][j] = true;
+            }
+        }
+
+        Palette { v, h }
+    }
+
+    fn make_paint(&mut self, k1: usize, k2: usize, k3: usize, a: f64, b: f64) -> (Color, usize, usize, Vec<Action>) {
+        let mut cnt = 0;
+        let mut turn = 0;
+        let mut actions: Vec<Action> = Vec::new();
+
+        // 係数は10倍して切り上げる
+        let a = [((1.0-a-b)*10.0).ceil(), (a*10.0).ceil(), (b*10.0).ceil()];
+        let mut partition: Vec<(usize, usize)> = Vec::new();
+        let mut use_grams: Vec<f64> = Vec::new();
+
+        for (i, &k) in [k1, k2, k3].iter().enumerate() {
+            // 絵の具の量が足りない場合は追加
+            if self.base_gram[k] < a[i]/10.0 {
+                actions.push(Action::add_color(k, 0, k));
+                cnt += 1;
+                turn += 1;
+                self.base_gram[k] += 1.0;
+            }
+            // 必要な絵の具の量にするため、仕切りを追加
+            let j = (a[i]/self.base_gram[k]).ceil() as usize;
+            if j < 10 {
+                actions.push(Action::toggle_separator(k, 9-j, k, 10-j));  // 必要な割合に分ける
+                partition.push((k, 9-j));
+                turn += 1;
+            }
+            actions.push(Action::toggle_separator(k, 9, k, 10));  // 混ぜる場所に繋げる
+            turn += 1;
+            let use_gram = self.base_gram[k] * j as f64 / 10.0;
+            self.base_gram[k] -= use_gram;  // 残る絵の具の量を計算
+            use_grams.push(use_gram);
+        }
+
+        // 絵の具の提出、残りの破棄
+        actions.push(Action::give_paint(0, 10));
+        actions.push(Action::discard_paint(0, 10));
+        turn += 2;
+
+        // 仕切りを元に戻す
+        for (i, &k) in [k1, k2, k3].iter().enumerate() {
+            actions.push(Action::toggle_separator(k, 9, k, 10));  // 混ぜる場所から隔離
+            turn += 1;
+        }
+        for &(k, j) in partition.iter() {
+            actions.push(Action::toggle_separator(k, j, k, j+1));  // 各絵の具の場所を元に戻す
+            turn += 1;
+        }
+
+        // 作成した色を再現
+        let mut color = Color::new(0.0, 0.0, 0.0);
+        for (i, &k) in [k1, k2, k3].iter().enumerate() {
+            color.add_color(self.base_color[k], use_grams[i]);
+        }
+        let all_gram: f64 = use_grams.iter().sum();
+        color.c /= all_gram;
+        color.m /= all_gram;
+        color.y /= all_gram;
+
+        (color, cnt, turn, actions)
     }
 }
 
@@ -769,6 +869,90 @@ impl Solver {
         (palette.init(self.n), actions, score, turn)
     }
 
+    fn three_paint(&self) -> (Palette, Vec<Action>, Score, usize) {
+        // 関数定義
+        fn dot(v1: Color, v2: Color) -> f64 {
+            v1.c*v2.c + v1.m*v2.m + v1.y*v2.y
+        }
+
+        fn subtract(v1: Color, v2: Color) -> Color {
+            Color { c: v1.c-v2.c, m: v1.m-v2.m, y: v1.y-v2.y }
+        }
+
+        fn mixing_3color(v1: Color, v2: Color, v3: Color, a: f64, b: f64) -> Color {
+            let mut color = Color { c: 0.0, m: 0.0, y: 0.0 };
+            color.add_color(v1, 1.0-a-b);
+            color.add_color(v2, a);
+            color.add_color(v3, b);
+
+            color
+        }
+
+        fn opt_3color(t: Color, v1: Color, v2: Color, v3: Color) -> (Color, f64, f64) {
+            let t_v1 = subtract(t, v1);
+            let v3_v1 = subtract(v3, v1);
+            let v2_v1 = subtract(v2, v1);
+
+            let dot_v3v3 = dot(v3_v1, v3_v1);
+            let dot_v2v2 = dot(v2_v1, v2_v1);
+            let dot_v3v2 = dot(v3_v1, v2_v1);
+            let dot_t_v3 = dot(t_v1, v3_v1);
+            let dot_t_v2 = dot(t_v1, v2_v1);
+
+            let denominator = dot_v3v3 * dot_v2v2 - dot_v3v2 * dot_v3v2;
+            let b = (dot_t_v3 * dot_v2v2 - dot_t_v2 * dot_v3v2) / denominator;
+            let a = (dot_t_v2 - b * dot_v3v2) / dot_v2v2;
+
+            let color = mixing_3color(v1, v2, v3, a, b);
+            (color, a, b)
+        }
+
+        // 各目標の色の3つの絵の具とその割合を算出
+        let mut three_paint_params: Vec<(usize, usize, usize, f64, f64)> = Vec::new();
+        let mut estimate_e = 0.0;
+
+        for &t in self.target.iter() {
+            let mut opt_e = f64::MAX;
+            let mut opt_params = (0, 0, 0, 0.0, 0.0);
+
+            for k1 in 0..self.k {
+                for k2 in (k1+1)..self.k {
+                    for k3 in (k2+1)..self.k {
+                        let v1 = self.own[k1];
+                        let v2 = self.own[k2];
+                        let v3 = self.own[k3];
+
+                        let (color, a, b) = opt_3color(t, v1, v2, v3);
+                        if !(0.0..1.0).contains(&(1.0-a-b)) || !(0.0..1.0).contains(&a) || !(0.0..1.0).contains(&b) { continue; }
+                        let e = t.dist(&color);
+                        if opt_e > e {
+                            opt_e = e;
+                            opt_params = (k1, k2, k3, a, b);
+                        }
+                    }
+                }
+            }
+            three_paint_params.push(opt_params);
+            estimate_e += opt_e;
+        }
+        eprintln!("estimate_e: {}", estimate_e);
+
+        // Actionsの構築
+        let mut palette = Palette5::new(&self.own);
+        let mut score = Score::new(self.h, self.d);
+        let mut actions: Vec<Action> = Vec::new();
+        let mut turn = 0;
+        for i in 0..self.h { 
+            let (k1, k2, k3, a, b) = three_paint_params[i];
+            let (color, cnt, t, action) = palette.make_paint(k1, k2, k3, a, b);
+            score.add_score(self.target[i], color, cnt);
+            turn += t;
+            actions.extend(action);
+        }
+
+        (palette.init(self.n), actions, score, turn)
+    }
+
     fn solve(&mut self) {
         eprintln!("start solve: {:.2?} s", self.timer.elapsed());
         (self.palette, self.actions, self.score, self.turn) = self.one_paint(); 
@@ -785,6 +969,15 @@ impl Solver {
 
         let (palette, actions, score, turn) = self.base_paint2();
         eprintln!("{:.2?} s: base paint2: {}", self.timer.elapsed(), score);
+        if score < self.score && turn <= self.t {
+            self.palette = palette;
+            self.actions = actions;
+            self.score = score;
+            self.turn = turn;
+        }
+
+        let (palette, actions, score, turn) = self.three_paint();
+        eprintln!("{:.2?} s: three paint: {}", self.timer.elapsed(), score);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;

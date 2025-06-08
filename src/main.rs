@@ -1,6 +1,6 @@
 use proconio::input;
 use std::fmt;
-use itertools::Itertools;
+use itertools::{enumerate, Itertools};
 use std::cmp::{Ordering, Reverse};
 use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::time::{Duration, Instant};
@@ -466,14 +466,14 @@ impl Palette5 {
         let mut actions: Vec<Action> = Vec::new();
         let well_size= self.well_size;
 
-        // 係数は10倍して切り上げる
+        // 係数はwell_size倍して切り上げる
         let a = [((1.0-a-b)*well_size as f64), (a*well_size as f64), (b*well_size as f64)];
         let mut partition: Vec<(usize, usize)> = Vec::new();
         let mut use_grams: Vec<f64> = Vec::new();
 
         for (i, &k) in [k1, k2, k3].iter().enumerate() {
             // 絵の具の量が足りない場合は追加
-            if self.base_gram[k] < a[i]/10.0 {
+            if self.base_gram[k] < a[i]/well_size as f64 {
                 actions.push(Action::add_color(k, 0, k));
                 cnt += 1;
                 turn += 1;
@@ -576,11 +576,12 @@ impl Solver {
         let mut score = Score::new(self.h, self.d);
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
-        for &target_color in self.target.iter() {
+        for (i, &target_color) in self.target.iter().enumerate() {
             let mut opt_eval= usize::MAX;
             let mut opt_action: Vec<Action> = Vec::new();
             let mut opt_score = score;
             let mut opt_turn = 0;
+            let mut opt_color = Color::new(0.0, 0.0, 0.0);
             for i in 0..self.k {
                 let (color, cnt, t, action) = palette.make_color(i);
                 let (eval, _) = score.eval(target_color, color, cnt);
@@ -590,11 +591,15 @@ impl Solver {
                     opt_score = score;
                     opt_score.add_score(target_color, color, cnt);
                     opt_turn = t;
+                    opt_color = color;
                 }
             }
             actions.extend(opt_action);
             score = opt_score;
             turn += opt_turn;
+            if i < 10 {
+                eprintln!("one paint: i: {}, e: {}", i, opt_color.dist(&self.target[i]));
+            }
         }
 
         (palette.init(self.n), actions, score, turn)
@@ -606,11 +611,12 @@ impl Solver {
         let mut score = Score::new(self.h, self.d);
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
-        for &target_color in self.target.iter() {
+        for (i, &target_color) in self.target.iter().enumerate() {
             let mut opt_eval= usize::MAX;
             let mut opt_action: Vec<Action> = Vec::new();
             let mut opt_score = score;
             let mut opt_turn = 0;
+            let mut opt_color = Color::new(0.0, 0.0, 0.0);
             for k1 in 0..self.k {
                 for k2 in 0..self.k {
                     for &p in palette.primes.iter() {
@@ -624,6 +630,7 @@ impl Solver {
                                 opt_score = score;
                                 opt_score.add_score(target_color, color, cnt);
                                 opt_turn = t;
+                                opt_color = color;
                             }
                         }
                     }
@@ -632,6 +639,9 @@ impl Solver {
             actions.extend(opt_action);
             score = opt_score;
             turn += opt_turn;
+            if i < 10 {
+                eprintln!("two paint: i: {}, e: {}", i, opt_color.dist(&self.target[i]));
+            }
         }
 
         (palette.init(self.n), actions, score, turn)
@@ -866,12 +876,15 @@ impl Solver {
             score.add_score(self.target[i], color, cnt);
             turn += t;
             actions.extend(action);
+            if i < 10 {
+                eprintln!("base paint2: i: {}, e: {}", i, color.dist(&self.target[i]));
+            }
         }
         
         (palette.init(self.n), actions, score, turn)
     }
 
-    fn three_paint(&self) -> (Palette, Vec<Action>, Score, usize) {
+    fn three_paint(&self) -> (Palette, Vec<Action>, Score, usize, Vec<(usize, usize, usize, f64, f64)>) {
         // 関数定義
         fn dot(v1: Color, v2: Color) -> f64 {
             v1.c*v2.c + v1.m*v2.m + v1.y*v2.y
@@ -936,38 +949,56 @@ impl Solver {
             }
             three_paint_params.push(opt_params);
             estimate_e += opt_e;
-            if i < 10 {
-                eprintln!("i: {}, opt_e: {}", i, opt_e);
-            }
         }
         eprintln!("estimate_e: {}", estimate_e);
 
         // Actionsの構築
-        let mut palette = Palette5::new(&self.own, 19);
+        let mut palette = Palette5::new(&self.own, 15);
         let mut score = Score::new(self.h, self.d);
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
         for i in 0..self.h { 
             let (k1, k2, k3, a, b) = three_paint_params[i];
             let (color, cnt, t, action) = palette.make_paint(k1, k2, k3, a, b);
-            if i < 10 {
-                eprintln!("i: {}, e: {}", i, color.dist(&self.target[i]));
-            }
             score.add_score(self.target[i], color, cnt);
             turn += t;
             actions.extend(action);
+            if i < 10 {
+                eprintln!("three paint: i: {}, e: {}", i, color.dist(&self.target[i]));
+            }
         }
 
-        (palette.init(self.n), actions, score, turn)
+        (palette.init(self.n), actions, score, turn, three_paint_params)
+    }
+
+    fn opt_paint(&self, three_paint_params: &Vec<(usize, usize, usize, f64, f64)>) -> (Palette, Vec<Action>, Score, usize) {
+        // palette2, palette4, palette5のうち一番良い結果を採用
+        // ターン数の重みや調整も入れる
+        let mut palette5 = Palette5::new(&self.own, 15);
+        let mut score = Score::new(self.h, self.d);
+        let mut actions: Vec<Action> = Vec::new();
+        let mut turn = 0;
+        for i in 0..self.h { 
+            let (k1, k2, k3, a, b) = three_paint_params[i];
+            let (color, cnt, t, action) = palette5.make_paint(k1, k2, k3, a, b);
+            score.add_score(self.target[i], color, cnt);
+            turn += t;
+            actions.extend(action);
+            if i < 10 {
+                eprintln!("three paint: i: {}, e: {}", i, color.dist(&self.target[i]));
+            }
+        }
+
+        (palette5.init(self.n), actions, score, turn)
     }
 
     fn solve(&mut self) {
         eprintln!("start solve: {:.2?} s", self.timer.elapsed());
         (self.palette, self.actions, self.score, self.turn) = self.one_paint(); 
-        eprintln!("{:.2?} s: one paint: {}", self.timer.elapsed(), self.score);
+        eprintln!("{:.2?} s: one paint: score: {}, turn: {}", self.timer.elapsed(), self.score, self.turn);
         
         let (palette, actions, score, turn) = self.two_paint();
-        eprintln!("{:.2?} s: two paint: {}", self.timer.elapsed(), score);
+        eprintln!("{:.2?} s: two paint: {}, turn: {}", self.timer.elapsed(), score, turn);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;
@@ -976,7 +1007,7 @@ impl Solver {
         }
 
         let (palette, actions, score, turn) = self.base_paint2();
-        eprintln!("{:.2?} s: base paint2: {}", self.timer.elapsed(), score);
+        eprintln!("{:.2?} s: base paint2: {}, turn: {}", self.timer.elapsed(), score, turn);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;
@@ -984,8 +1015,17 @@ impl Solver {
             self.turn = turn;
         }
 
-        let (palette, actions, score, turn) = self.three_paint();
-        eprintln!("{:.2?} s: three paint: {}", self.timer.elapsed(), score);
+        let (palette, actions, score, turn, three_paint_params) = self.three_paint();
+        eprintln!("{:.2?} s: three paint: {}, turn: {}", self.timer.elapsed(), score, turn);
+        if score < self.score && turn <= self.t {
+            self.palette = palette;
+            self.actions = actions;
+            self.score = score;
+            self.turn = turn;
+        }
+
+        let (palette, actions, score, turn) = self.opt_paint(&three_paint_params);
+        eprintln!("{:.2?} s: opt paint: {}, turn: {}", self.timer.elapsed(), score, turn);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;

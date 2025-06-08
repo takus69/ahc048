@@ -225,18 +225,24 @@ impl Palette2 {
     fn new(own: &Vec<Color>, primes: Vec<usize>) -> Self {
         let own = own.clone();
         let mut row: HashMap<usize, usize> = HashMap::new();
-        for (i, &p) in primes.iter().enumerate() {
+        let mut i = 0;
+        for &p in primes.iter() {
             row.insert(p, i);
+            i += p;
         }
         Self { own, row, primes }
     }
     
     fn init(&self, n: usize) -> Palette {
         let mut v = vec![vec![false; n-1]; n];
-        let h = vec![vec![true; n]; n-1];
+        let mut h = vec![vec![false; n]; n-1];
+
+        for i in 0..n {
+            v[i][18] = true;
+        }
 
         for (&p, &i) in self.row.iter() {
-            v[i][p-1] = true;
+            h[i+p-1][19] = true;
         }
 
         Palette { v, h }
@@ -246,24 +252,24 @@ impl Palette2 {
         let mut actions: Vec<Action> = Vec::new();
         let &pi = self.row.get(&p).unwrap();
         let (cnt, turn, color) = if p == 1 {
-            actions.push(Action::add_color(pi, 0, k1));
-            actions.push(Action::give_paint(pi, 0));
+            actions.push(Action::add_color(pi, 19, k1));
+            actions.push(Action::give_paint(pi, 19));
 
             (1, 2, self.own[k1])
         } else {
             let mut tmp_turn = 4;
-            actions.push(Action::add_color(pi, 0, k2));
+            actions.push(Action::add_color(pi, 19, k2));
             if p != i {
-                actions.push(Action::toggle_separator(pi, i-1, pi, i));
+                actions.push(Action::toggle_separator(pi+i-1, 19, pi+i, 19));
                 tmp_turn += 1;
             }
-            actions.push(Action::add_color(pi, 0, k1));
-            actions.push(Action::give_paint(pi, 0));
+            actions.push(Action::add_color(pi, 19, k1));
+            actions.push(Action::give_paint(pi, 19));
             if p != i {
-                actions.push(Action::toggle_separator(pi, i-1, pi, i));
+                actions.push(Action::toggle_separator(pi+i-1, 19, pi+i, 19));
                 tmp_turn += 1;
             }
-            actions.push(Action::discard_paint(pi, 0));
+            actions.push(Action::discard_paint(pi, 19));
             let color = if i == 1 {
                 Color::mixing(self.own[k1], self.own[k2], p-1, i)
             } else {
@@ -741,6 +747,10 @@ impl Solver {
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
         for i in 0..self.h { 
+            // palette2
+
+            
+            // palette5
             let (k1, k2, k3, a, b) = three_paint_params[i];
             let (color, cnt, t, action) = palette5.make_paint(k1, k2, k3, a, b);
             score.add_score(self.target[i], color, cnt);
@@ -756,11 +766,11 @@ impl Solver {
 
     fn solve(&mut self) {
         eprintln!("start solve: {:.2?} s", self.timer.elapsed());
-        (self.palette, self.actions, self.score, self.turn) = self.two_paint(); 
-        eprintln!("{:.2?} s: two paint: score: {}, turn: {}", self.timer.elapsed(), self.score, self.turn);
+        (self.palette, self.actions, self.score, self.turn) = self.base_paint2(); 
+        eprintln!("{:.2?} s: base paint2: score: {}, turn: {}", self.timer.elapsed(), self.score, self.turn);
         
-        let (palette, actions, score, turn) = self.base_paint2();
-        eprintln!("{:.2?} s: base paint2: {}, turn: {}", self.timer.elapsed(), score, turn);
+        let (palette, actions, score, turn) = self.two_paint();
+        eprintln!("{:.2?} s: two paint: {}, turn: {}", self.timer.elapsed(), score, turn);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;

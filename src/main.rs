@@ -323,6 +323,22 @@ impl Palette4 {
         Palette { v, h }
     }
 
+    fn init2(&self, n: usize) -> Palette {
+        let mut v = vec![vec![false; n-1]; n];
+        let mut h = vec![vec![false; n]; n-1];
+
+        for i in 0..n {
+            v[i][14] = true;
+            v[i][17] = true;
+            if i == 19 { continue; }
+            for j in 15..=17 {
+                h[i][j] = true;
+            }
+        }
+
+        Palette { v, h }
+    }
+
     fn give_paint(&mut self, comb_i: usize) -> (Color, usize, usize, Vec<Action>) {
         let mut cnt = 0;
         let mut turn = 0;
@@ -330,13 +346,13 @@ impl Palette4 {
         let mut actions: Vec<Action> = Vec::new();
         if self.gram[i] == 0 {
             for &k in self.comb[i].iter() {
-                actions.push(Action::add_color(i, 0, k));
+                actions.push(Action::add_color(i, 15, k));
                 cnt += 1;
                 turn += 1;
             } 
             self.gram[i] += self.comb[i].len();
         }
-        actions.push(Action::give_paint(i, 0));
+        actions.push(Action::give_paint(i, 15));
         self.gram[i] -= 1;
         turn += 1;
 
@@ -440,6 +456,122 @@ impl Palette5 {
     }
 }
 
+#[derive(Clone)]
+struct Palette6 {
+    base_color: Vec<Color>,
+    remain_color: Vec<Color>,
+    remain_gram: Vec<f64>,
+    well_size: usize,
+}
+
+impl Palette6 {
+    fn new(own: &Vec<Color>, well_size: usize) -> Self {
+        let n = 20;
+        let mut base_color: Vec<Color> = Vec::new();
+        for &o in own.iter() {
+            base_color.push(o);
+        }
+        let remain_color: Vec<Color> = vec![Color { c: 0.0, m: 0.0, y: 0.0 }; n];
+        let remain_gram: Vec<f64> = vec![0.0; n];
+
+        Self { base_color, remain_color, remain_gram, well_size }
+    }
+    
+    fn init(&self, n: usize) -> Palette {
+        let mut v = vec![vec![false; n-1]; n];
+        if self.well_size < 19 {
+            for i in 0..n {
+                v[i][self.well_size-1] = true;
+            }
+        }
+        let mut h = vec![vec![false; n]; n-1];
+        for i in 0..(n-1) {
+            for j in 0..self.well_size {
+                h[i][j] = true;
+            }
+        }
+
+        Palette { v, h }
+    }
+
+    fn make_paint(&mut self, i: usize, k1: usize, k2: usize, a: f64) -> (Color, usize, usize, Vec<Action>) {
+        // i番目のウェルを使用. k2の絵の具を追加 => aに分割 => k1の絵の具を追加 => 提出 => 仕切りを戻す
+        let mut cnt = 0;
+        let mut turn = 0;
+        let mut actions: Vec<Action> = Vec::new();
+        let well_size= self.well_size;
+
+        // 係数はwell_size倍する
+        let j = (a*well_size as f64).round() as usize;
+        assert!(j >= 2, "two paint2 not j < 2, j: {}, a: {}", j, a);
+
+        // k2の絵の具
+        if k2 != usize::MAX {  // ウェルに色が残っていない時に追加
+            actions.push(Action::add_color(i, 0, k2));
+            turn += 1;
+            cnt += 1;
+        }
+        if j < 19 {
+            actions.push(Action::toggle_separator(i, j-1, i, j));  // 必要な割合に分ける
+            turn += 1;
+        }
+
+        // k1の絵の具追加、提出
+        actions.push(Action::add_color(i, 0, k1));
+        actions.push(Action::give_paint(i, 0));
+        turn += 2;
+        cnt += 1;
+
+        // 仕切り戻す
+        if j < 19 {
+            actions.push(Action::toggle_separator(i, j-1, i, j));  // 必要な割合に分ける
+            turn += 1;
+        }
+
+        // 作成した色を再現
+        let mut color = self.base_color[k1];
+        let mut color2 = if k2 == usize::MAX {
+            self.remain_color[i]
+        } else {
+            self.base_color[k2]
+        };
+        color.add_color(color2, j as f64 / self.well_size as f64);
+        let all_gram = 1.0 + j as f64 / self.well_size as f64;
+        color.c /= all_gram;
+        color.m /= all_gram;
+        color.y /= all_gram;
+        let make_color = color;
+        
+        if a != f64::MAX {
+            let rate = (self.well_size-j) as f64 / j as f64;
+            color.add_color(color2, rate);
+            let all_gram = 1.0+rate;
+            color.c /= all_gram;
+            color.m /= all_gram;
+            color.y /= all_gram;
+        }
+        self.remain_color[i] = color;
+        self.remain_gram[i] = 1.0;
+        if self.remain_gram[i] < 0.0 {
+            self.remain_gram[i] = 0.0;
+        }
+
+        (make_color, cnt, turn, actions)
+    }
+
+    fn give_paint(&mut self, i: usize) -> (Color, usize, usize, Vec<Action>) {
+        let cnt = 0;
+        let turn = 1;
+        let color = self.remain_color[i];
+        assert!(self.remain_gram[i]==1.0);
+        let actions: Vec<Action> = vec![Action::give_paint(i, 0)];
+        self.remain_color[i] = Color { c: 0.0, m: 0.0, y: 0.0 };
+        self.remain_gram[i] = 0.0;
+
+        (color, cnt, turn, actions)
+    }
+}
+
 struct Solver {
     n: usize,
     k: usize,
@@ -522,9 +654,9 @@ impl Solver {
             actions.extend(opt_action);
             score = opt_score;
             turn += opt_turn;
-            if i < 10 {
-                eprintln!("two paint: i: {}, e: {}", i, opt_color.dist(&self.target[i]));
-            }
+            // if i < 10 {
+            //     eprintln!("two paint: i: {}, e: {}", i, opt_color.dist(&self.target[i]));
+            // }
         }
 
         (palette.init(self.n), actions, score, turn)
@@ -640,16 +772,128 @@ impl Solver {
         let mut actions: Vec<Action> = Vec::new();
         let mut turn = 0;
         for i in 0..self.h { 
+            if i < 20 {
+                let comb_i = target_comb[i];
+                let &i = palette.comb2i.get(&comb_i).unwrap();
+                eprintln!("i: {}, gram: {:?}, comb: {:?}", i, palette.gram, palette.comb[i]);
+            }
             let (color, cnt, t, action) = palette.give_paint(target_comb[i]);
             score.add_score(self.target[i], color, cnt);
             turn += t;
             actions.extend(action);
-            if i < 10 {
-                eprintln!("base paint2: i: {}, e: {}", i, color.dist(&self.target[i]));
-            }
+            // if i < 10 {
+            //     eprintln!("base paint2: i: {}, e: {}", i, color.dist(&self.target[i]));
+            // }
         }
         
         (palette.init(self.n), actions, score, turn)
+    }
+
+    fn two_paint2(&self) -> (Palette, Vec<Action>, Score, usize, Vec<(usize, usize, usize, f64)>) {
+        // 関数定義
+        fn dot(v1: Color, v2: Color) -> f64 {
+            v1.c*v2.c + v1.m*v2.m + v1.y*v2.y
+        }
+
+        fn subtract(v1: Color, v2: Color) -> Color {
+            Color { c: v1.c-v2.c, m: v1.m-v2.m, y: v1.y-v2.y }
+        }
+
+        fn mixing_2color(v1: Color, v2: Color, a: f64) -> Color {
+            let mut color = Color { c: 0.0, m: 0.0, y: 0.0 };
+            color.add_color(v1, 1.0-a);
+            color.add_color(v2, a);
+
+            color
+        }
+
+        fn opt_2color(t: Color, v1: Color, v2: Color) -> (Color, f64) {
+            let t_v1 = subtract(t, v1);
+            let v2_v1 = subtract(v2, v1);
+
+            let a = dot(t_v1, v2_v1) / dot(v2_v1, v2_v1);
+
+            let color = mixing_2color(v1, v2, a);
+            (color, a)
+        }
+
+        // 各目標の色の2つの絵の具とその割合を算出
+        let mut palette = Palette6::new(&self.own, 20);
+        let mut score = Score::new(self.h, self.d);
+        let mut actions: Vec<Action> = Vec::new();
+        let mut turn = 0;
+        let mut two_paint_params: Vec<(usize, usize, usize, f64)> = Vec::new();
+        let mut estimate_e = 0.0;
+
+        for (i, &t) in self.target.iter().enumerate() {
+            let mut opt_e = f64::MAX;
+            let mut opt_params = (0, 0, 0, f64::MAX);
+
+            // パレットのウェルに色がある場合を順に処理
+            let mut empty_well = false;
+            for j in 0..self.n {
+                let remain_gram = palette.remain_gram[j];
+                if remain_gram > 0.0 {
+                    // そのまま使える場合
+                    let remain_color = palette.remain_color[j];
+                    let e = t.dist(&remain_color);
+                    if opt_e > e {
+                        opt_e = e;
+                        opt_params = (j, usize::MAX, usize::MAX, f64::MAX);
+                    }
+
+                    // 残っている色と混ぜる
+                    for k1 in 0..self.k {
+                        let (color, a) = opt_2color(t, self.own[k1], remain_color);
+                        if !(0.0..0.5).contains(&a) { continue; }
+                        if (((a/(1.0-a)) * palette.well_size as f64).round() as usize ) < 2 { continue; }
+                        let e = t.dist(&color);
+                        if opt_e > e {
+                            opt_e = e;
+                            opt_params = (j, k1, usize::MAX, a/(1.0-a));  // パレット用の係数に変換
+                        }
+                    }
+                } else {  // ウェルが空の場合
+                    if empty_well { continue; }
+                    for k1 in 0..self.k {
+                        for k2 in 0..self.k {
+                            if k1 == k2 { continue; }
+                            let v1 = self.own[k1];
+                            let v2 = self.own[k2];
+
+                            let (color, a) = opt_2color(t, v1, v2);
+                            if !(0.0..0.5).contains(&a) { continue; }
+                            if (((a/(1.0-a)) * palette.well_size as f64).round() as usize) < 2 { continue; }
+                            let e = t.dist(&color);
+                            if opt_e > e {
+                                opt_e = e;
+                                opt_params = (j, k1, k2, a/(1.0-a));  // パレット用の係数に変換
+                            }
+                        }
+                    }
+                    empty_well = true;  // 空のウェルの処理は一度だけ実施
+                }
+            }
+            two_paint_params.push(opt_params);
+            let (opt_i, opt_k1, opt_k2, opt_a) = opt_params;
+            // eprintln!("opt_a: {}, {}", opt_a, opt_a*palette.well_size as f64);
+            let (color, cnt, tt, action) = if opt_k1 == usize::MAX {
+                palette.give_paint(opt_i)
+            } else {
+                palette.make_paint(opt_i, opt_k1, opt_k2, opt_a)
+            };
+            score.add_score(self.target[i], color, cnt);
+            turn += tt;
+            actions.extend(action);
+            estimate_e += opt_e;
+            // if i < 10 {
+            //     eprintln!("params: {:?}", opt_params);
+            //     eprintln!("two paint2: i: {}, e: {}, estimate_e: {}, color: {:?}", i, color.dist(&self.target[i]), opt_e, (color.c, color.m, color.y));
+            // }
+        }
+        eprintln!("two paint2 estimate_e: {}", estimate_e);
+
+        (palette.init(self.n), actions, score, turn, two_paint_params)
     }
 
     fn three_paint(&self) -> (Palette, Vec<Action>, Score, usize, Vec<(usize, usize, usize, f64, f64)>) {
@@ -731,9 +975,9 @@ impl Solver {
             score.add_score(self.target[i], color, cnt);
             turn += t;
             actions.extend(action);
-            if i < 10 {
-                eprintln!("three paint: i: {}, e: {}", i, color.dist(&self.target[i]));
-            }
+            // if i < 10 {
+            //     eprintln!("three paint: i: {}, e: {}", i, color.dist(&self.target[i]));
+            // }
         }
 
         (palette.init(self.n), actions, score, turn, three_paint_params)
@@ -756,9 +1000,9 @@ impl Solver {
             score.add_score(self.target[i], color, cnt);
             turn += t;
             actions.extend(action);
-            if i < 10 {
-                eprintln!("three paint: i: {}, e: {}", i, color.dist(&self.target[i]));
-            }
+            // if i < 10 {
+            //     eprintln!("three paint: i: {}, e: {}", i, color.dist(&self.target[i]));
+            // }
         }
 
         (palette5.init(self.n), actions, score, turn)
@@ -768,7 +1012,7 @@ impl Solver {
         eprintln!("start solve: {:.2?} s", self.timer.elapsed());
         (self.palette, self.actions, self.score, self.turn) = self.base_paint2(); 
         eprintln!("{:.2?} s: base paint2: score: {}, turn: {}", self.timer.elapsed(), self.score, self.turn);
-        
+
         let (palette, actions, score, turn) = self.two_paint();
         eprintln!("{:.2?} s: two paint: {}, turn: {}", self.timer.elapsed(), score, turn);
         if score < self.score && turn <= self.t {
@@ -787,8 +1031,17 @@ impl Solver {
             self.turn = turn;
         }
 
-        let (palette, actions, score, turn) = self.opt_paint(&three_paint_params);
-        eprintln!("{:.2?} s: opt paint: {}, turn: {}", self.timer.elapsed(), score, turn);
+        // let (palette, actions, score, turn) = self.opt_paint(&three_paint_params);
+        // eprintln!("{:.2?} s: opt paint: {}, turn: {}", self.timer.elapsed(), score, turn);
+        // if score < self.score && turn <= self.t {
+        //     self.palette = palette;
+        //     self.actions = actions;
+        //     self.score = score;
+        //     self.turn = turn;
+        // }
+
+        let (palette, actions, score, turn, two_paint_params) = self.two_paint2();
+        eprintln!("{:.2?} s: two paint2: {}, turn: {}", self.timer.elapsed(), score, turn);
         if score < self.score && turn <= self.t {
             self.palette = palette;
             self.actions = actions;
